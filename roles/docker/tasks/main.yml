@@ -1,0 +1,67 @@
+---
+- name: Update package manager cache
+  apt:
+    update_cache: yes
+
+- name: Install Docker prerequisites
+  apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+    state: present
+
+- name: Create directory for Docker GPG key
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Add Docker GPG key
+  shell: |
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+- name: Add Docker repository
+  shell: |
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+- name: Update apt cache after adding Docker repository
+  apt:
+    update_cache: yes
+
+- name: Install Docker Engine
+  apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: latest
+
+- name: Ensure Docker service is running
+  systemd:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Add ansible user to docker group
+  user:
+    name: ansible
+    groups: docker
+    append: yes
+
+- name: Pull NGINX Docker image
+  docker_image:
+    name: nginx
+    source: pull
+
+- name: Run NGINX container
+  docker_container:
+    name: nginx-container
+    image: nginx
+    ports:
+      - "80:80"
+    state: started
+    restart_policy: always

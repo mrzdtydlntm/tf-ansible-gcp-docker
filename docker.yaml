@@ -1,0 +1,7 @@
+---
+- name: Install Docker
+  hosts: all
+  remote_user: ansible
+  become: yes
+  roles:
+    - docker
