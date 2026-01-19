@@ -7,10 +7,18 @@ locals {
 
   web_servers = {
     docker-000-staging = {
-      machine_type = "e2-micro"
-      zone         = "asia-southeast2-a"
+      machine_type     = "e2-micro"
+      zone             = "asia-southeast2-a"
+      disk_size        = 20          # in GB
+      external_ip_type = "static"    # Options: static, ephemeral
+      internal_ip_type = "ephemeral" # Options: static, ephemeral
+      open_ports       = ["8080", "9090"]
     }
   }
+
+  custom_ports = distinct(flatten([
+    for server in local.web_servers : try(server.open_ports, [])
+  ]))
 }
 
 provider "google" {
@@ -25,7 +33,7 @@ resource "google_service_account" "docker" {
 }
 
 resource "google_compute_firewall" "web" {
-  name     = "allow-http"
+  name     = "allow-http-https"
   network  = local.network
   priority = 1000
 
@@ -38,6 +46,41 @@ resource "google_compute_firewall" "web" {
   target_service_accounts = [google_service_account.docker.email]
 }
 
+resource "google_compute_firewall" "custom" {
+  count    = length(local.custom_ports) > 0 ? 1 : 0
+  name     = "allow-custom-ports"
+  network  = local.network
+  priority = 1000
+
+  allow {
+    protocol = "tcp"
+    ports    = local.custom_ports
+  }
+
+  source_ranges           = ["0.0.0.0/0"]
+  target_service_accounts = [google_service_account.docker.email]
+}
+
+resource "google_compute_address" "external_ipv4" {
+  for_each = {
+    for k, v in local.web_servers : k => v
+    if try(v.external_ip_type, "ephemeral") == "static"
+  }
+  name   = "${each.key}-external-ip"
+  region = "asia-southeast2"
+}
+
+resource "google_compute_address" "internal_ipv4" {
+  for_each = {
+    for k, v in local.web_servers : k => v
+    if try(v.internal_ip_type, "ephemeral") == "static"
+  }
+  name         = "${each.key}-internal-ip"
+  subnetwork   = "default"
+  address_type = "INTERNAL"
+  region       = "asia-southeast2"
+}
+
 resource "google_compute_instance" "docker" {
   for_each     = local.web_servers
   name         = each.key
@@ -47,12 +90,16 @@ resource "google_compute_instance" "docker" {
   boot_disk {
     initialize_params {
       image = local.image
+      size  = each.value.disk_size
     }
   }
 
   network_interface {
-    network = local.network
-    access_config {}
+    network    = local.network
+    network_ip = try(each.value.internal_ip_type, "ephemeral") == "static" ? google_compute_address.internal_ipv4[each.key].address : null
+    access_config {
+      nat_ip = try(each.value.external_ip_type, "ephemeral") == "static" ? google_compute_address.external_ipv4[each.key].address : null
+    }
   }
 
   service_account {
